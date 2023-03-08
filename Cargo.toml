@@ -38,3 +38,6 @@ dotenv = "0.15.0"
 
 [[example]]
 name = "create_completion"
+
+[[example]]
+name = "create_chat_completion"
