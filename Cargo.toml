@@ -1,0 +1,40 @@
+[package]
+name = "ru-openai"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.66.1"
+authors = ["Liudao <jimmyseraph@testops.vip>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/jimmyseraph/ru-openai"
+homepage = "https://github.com/jimmyseraph/ru-openai"
+description = """
+ru-openai is a rust library for openai api.
+"""
+categories = ["api-binding"]
+keywords = ["openai", "api"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# 请求库
+reqwest = { version = "0.11", features = ["json", "multipart", "stream"] } 
+# 异步库
+tokio = { version = "1", features = ["full"] } 
+# 序列化库
+serde_json = "1.0.88"
+serde_derive = "1.0.147"
+serde = "1.0.147"
+# url解析库
+url = "2.3.1"
+# 日志库
+tracing = "0.1.37"
+tracing-test = "0.2.3"
+
+mime = "0.3.16"
+
+[dev-dependencies]
+dotenv = "0.15.0"
+
+[[example]]
+name = "create_completion"
