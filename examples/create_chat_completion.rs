@@ -15,6 +15,7 @@ async fn main() {
         ..Default::default()
     };
     println!("Question: {}", content);
-    let response = openai_api.create_chat_completion(request).await.unwrap();
-    println!("Answer: {}", response.choices[0].message.content);
+    let response = openai_api.create_chat_completion(request).await;
+    // println!("Answer: {}", response.choices[0].message.content);
+    println!("Answer: {:?}", response);
 }

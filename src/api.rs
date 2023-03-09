@@ -2,9 +2,47 @@
 use std::fmt::{Display, Formatter};
 use std::fs;
 use crate::configuration::Configuration;
+use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
 use reqwest::{Method, multipart::Part};
 use tracing::*;
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ErrorInfo {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub param: Option<String>,
+    pub code: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ReturnErrorType {
+    pub error: ErrorInfo,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct OpenAIApiError {
+    pub code: i32,
+    pub error: ErrorInfo,
+}
+
+impl OpenAIApiError {
+    pub fn new(code: i32, error: ErrorInfo) -> Self {
+        Self { code, error }
+    }
+
+    pub fn from(error: reqwest::Error) -> Self {
+        let code = error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR).as_u16() as i32;
+        let error = ErrorInfo {
+            message: error.to_string(),
+            message_type: "request error".to_string(),
+            param: None,
+            code: None,
+        };
+        Self::new(code, error)
+    }
+}
 
 pub type Error = reqwest::Error;
 
@@ -717,12 +755,10 @@ impl OpenAIApi {
         Self { configuration }
     }
 
-    /* 
-    List models
-    GET https://api.openai.com/v1/models
-    Lists the currently available models, and provides basic information about each one such as the owner and availability.
-    */ 
-    pub async fn list_models(self) -> Result<ListModelsResponse, Error> {
+    /// List models
+    /// GET https://api.openai.com/v1/models
+    /// Lists the currently available models, and provides basic information about each one such as the owner and availability.
+    pub async fn list_models(self) -> Result<ListModelsResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -730,16 +766,23 @@ impl OpenAIApi {
             "/models".to_string(), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<ListModelsResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<ListModelsResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Retrieve model
-    GET https://api.openai.com/v1/models/{model}
-    Retrieves a model instance, providing basic information about the model such as the owner and permissioning.
-     */
-    pub async fn retrieve_model(self, model: String) -> Result<RetrieveModelResponse, Error> {
+    /// Retrieve model
+    /// GET https://api.openai.com/v1/models/{model}
+    /// Retrieves a model instance, providing basic information about the model such as the owner and permissioning.
+    pub async fn retrieve_model(self, model: String) -> Result<RetrieveModelResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -747,16 +790,23 @@ impl OpenAIApi {
             format!("/models/{}", model), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<RetrieveModelResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<RetrieveModelResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create completion
-    POST https://api.openai.com/v1/completions
-    Creates a completion for the provided prompt and parameters
-     */
-    pub async fn create_completion(self, request: CreateCompletionRequest) -> Result<CreateCompletionResponse, Error> {
+    /// Create completion
+    /// POST https://api.openai.com/v1/completions
+    /// Creates a completion for the provided prompt and parameters
+    pub async fn create_completion(self, request: CreateCompletionRequest) -> Result<CreateCompletionResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -764,17 +814,25 @@ impl OpenAIApi {
             "/completions".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
-        response.json::<CreateCompletionResponse>().await
+        if response.status().is_success() {
+            response.json::<CreateCompletionResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create chat completion
-    POST https://api.openai.com/v1/chat/completions
-    Creates a completion for the chat message
-     */
-    pub async fn create_chat_completion(self, request: CreateChatCompletionRequest) -> Result<CreateChatCompletionResponse, Error> {
+    ///
+    /// Create chat completion
+    /// POST https://api.openai.com/v1/chat/completions
+    /// Creates a completion for the chat message
+    pub async fn create_chat_completion(self, request: CreateChatCompletionRequest) -> Result<CreateChatCompletionResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -782,51 +840,77 @@ impl OpenAIApi {
             "/chat/completions".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
-        response.json::<CreateChatCompletionResponse>().await
+        // println!("response: {:#?}, {}", response, response.status().is_success());
+        if response.status().is_success() {
+            response.json::<CreateChatCompletionResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create edit
-    POST https://api.openai.com/v1/edits
-    Creates a new edit for the provided input, instruction, and parameters.
-     */
-    pub async fn create_edit(self, request: CreateEditRequest) -> Result<CreateEditResponse, Error> {
+    /// Create edit
+    /// POST https://api.openai.com/v1/edits
+    /// Creates a new edit for the provided input, instruction, and parameters.
+    pub async fn create_edit(self, request: CreateEditRequest) -> Result<CreateEditResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/edits".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
-        response.json::<CreateEditResponse>().await
+        // println!("response: {:#?}", response.status());
+        if response.status().is_success() {
+            response.json::<CreateEditResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create image
-    POST https://api.openai.com/v1/images/generations
-    Creates an image given a prompt.
-     */
-    pub async fn create_image(self, request: CreateImageRequest) -> Result<CreateImageResponse, Error> {
+    ///
+    /// Create image
+    /// POST https://api.openai.com/v1/images/generations
+    /// Creates an image given a prompt.
+    /// 
+    pub async fn create_image(self, request: CreateImageRequest)  -> Result<CreateImageResponse, OpenAIApiError>{
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/images/generations".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
-        println!("response: {:#?}", response);
-        response.json::<CreateImageResponse>().await
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        // println!("body: {:?}", response.unwrap().text().await);
+        if response.status().is_success() {
+            response.json::<CreateImageResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create image editBeta
-    POST https://api.openai.com/v1/images/edits
-    Creates an edited or extended image given an original image and a prompt.
-     */
-    pub async fn create_image_edit(self, request: CreateImageEditRequest) -> Result<CreateImageEditResponse, Error> {
+    
+    /// Create image editBeta
+    /// POST https://api.openai.com/v1/images/edits
+    /// Creates an edited or extended image given an original image and a prompt.
+    pub async fn create_image_edit(self, request: CreateImageEditRequest) -> Result<CreateImageEditResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
@@ -868,17 +952,24 @@ impl OpenAIApi {
             Some(user) => form.text("user", user),
             None => form,
         };
-        let response = request_builder.multipart(form).send().await?;
+        let response = request_builder.multipart(form).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         // println!("response: {:#?}", response);
-        response.json::<CreateImageEditResponse>().await
+        if response.status().is_success() {
+            response.json::<CreateImageEditResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
     
-    /*
-    Create image variation
-    POST https://api.openai.com/v1/images/variations
-    Creates a variation of a given image.
-     */
-    pub async fn create_image_variation(self, request: CreateImageVariationRequest) -> Result<CreateImageVariationResponse, Error> {
+    /// Create image variation
+    /// POST https://api.openai.com/v1/images/variations
+    /// Creates a variation of a given image.
+    pub async fn create_image_variation(self, request: CreateImageVariationRequest) -> Result<CreateImageVariationResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
@@ -908,34 +999,48 @@ impl OpenAIApi {
             Some(user) => form.text("user", user),
             None => form,
         };
-        let response = request_builder.multipart(form).send().await?;
+        let response = request_builder.multipart(form).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         // println!("response: {:#?}", response);
-        response.json::<CreateImageVariationResponse>().await
+        if response.status().is_success() {
+            response.json::<CreateImageVariationResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create embeddings
-    POST https://api.openai.com/v1/embeddings
-    Creates an embedding vector representing the input text.
-     */
-    pub async fn create_embeddings(self, request: CreateEmbeddingsRequest) -> Result<CreateEmbeddingsResponse, Error> {
+    /// Create embeddings
+    /// POST https://api.openai.com/v1/embeddings
+    /// Creates an embedding vector representing the input text.
+    pub async fn create_embeddings(self, request: CreateEmbeddingsRequest) -> Result<CreateEmbeddingsResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/embeddings".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
-        response.json::<CreateEmbeddingsResponse>().await
+        if response.status().is_success() {
+            response.json::<CreateEmbeddingsResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create transcription
-    POST https://api.openai.com/v1/audio/transcriptions
-    Transcribes audio into the input language.
-     */
-    pub async fn create_transcription(self, request: CreateTranscriptionRequest) -> Result<CreateTranscriptionResponse, Error> {
+    /// Create transcription
+    /// POST https://api.openai.com/v1/audio/transcriptions
+    /// Transcribes audio into the input language.
+    pub async fn create_transcription(self, request: CreateTranscriptionRequest) -> Result<CreateTranscriptionResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
@@ -968,56 +1073,68 @@ impl OpenAIApi {
             Some(language) => form.text("language", language),
             None => form,
         };
-        println!("request form: {:#?}", form);
-        let response = request_builder.multipart(form).send().await?;
+        info!("request form: {:#?}", form);
+        let response = request_builder.multipart(form).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
         println!("response: {:#?}", response);
         let rf = request.response_format.clone();
-        match rf {
-            Some(response_format) => match response_format {
-                CreateTranscriptionResponseFormat::TEXT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseText {
-                        text,
-                    };
-                    Ok(CreateTranscriptionResponse::Text(response))
+        if response.status().is_success() {
+            match rf {
+                Some(response_format) => match response_format {
+                    CreateTranscriptionResponseFormat::TEXT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseText {
+                            text,
+                        };
+                        Ok(CreateTranscriptionResponse::Text(response))
+                    },
+                    CreateTranscriptionResponseFormat::JSON => {
+                        let response = response.json::<CreateTranscriptionResponseJson>().await
+                            .map_err(|err| OpenAIApiError::from(err)).unwrap();
+                        Ok(CreateTranscriptionResponse::Json(response))
+                    },
+                    CreateTranscriptionResponseFormat::SRT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseSrt {
+                            text,
+                        };
+                        Ok(CreateTranscriptionResponse::Srt(response))
+                    },
+                    CreateTranscriptionResponseFormat::VTT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseVtt {
+                            text,
+                        };
+                        Ok(CreateTranscriptionResponse::Vtt(response))
+                    },
+                    CreateTranscriptionResponseFormat::VERBOSEJSON => {
+                        let response = response.json::<CreateTranscriptionResponseVerboseJson>().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        Ok(CreateTranscriptionResponse::VerboseJson(response))
+                    },
                 },
-                CreateTranscriptionResponseFormat::JSON => {
-                    let response = response.json::<CreateTranscriptionResponseJson>().await?;
+                None => {
+                    let response = response.json::<CreateTranscriptionResponseJson>().await
+                        .map_err(|err| OpenAIApiError::from(err))?;
                     Ok(CreateTranscriptionResponse::Json(response))
                 },
-                CreateTranscriptionResponseFormat::SRT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseSrt {
-                        text,
-                    };
-                    Ok(CreateTranscriptionResponse::Srt(response))
-                },
-                CreateTranscriptionResponseFormat::VTT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseVtt {
-                        text,
-                    };
-                    Ok(CreateTranscriptionResponse::Vtt(response))
-                },
-                CreateTranscriptionResponseFormat::VERBOSEJSON => {
-                    let response = response.json::<CreateTranscriptionResponseVerboseJson>().await?;
-                    Ok(CreateTranscriptionResponse::VerboseJson(response))
-                },
-            },
-            None => {
-                let response = response.json::<CreateTranscriptionResponseJson>().await?;
-                Ok(CreateTranscriptionResponse::Json(response))
-            },
+            }
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
         }
         
     }
 
-    /*
-    Create translation
-    POST https://api.openai.com/v1/audio/translations
-    Translates audio into into English.
-     */
-    pub async fn create_translation(self, request: CreateTranslationRequest) -> Result<CreateTranslationResponse, Error> {
+    /// Create translation
+    /// POST https://api.openai.com/v1/audio/translations
+    /// Translates audio into into English.
+    pub async fn create_translation(self, request: CreateTranslationRequest) -> Result<CreateTranslationResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
@@ -1026,7 +1143,7 @@ impl OpenAIApi {
         );
         let parts: Vec<&str> = request.file.split('.').collect();
         let suffix = parts[parts.len() - 1];
-        let mime_type = Self::get_mime_type_from_suffix(suffix.to_string())?;
+        let mime_type = Self::get_mime_type_from_suffix(suffix.to_string()).unwrap();
         let audio_file = fs::read(request.file.clone()).unwrap();
         let audio_file_part = Part::bytes(audio_file)
             .file_name(format!("audio.{}", suffix))
@@ -1046,71 +1163,91 @@ impl OpenAIApi {
             Some(temperature) => form.text("temperature", temperature.to_string()),
             None => form,
         };
-        let response = request_builder.multipart(form).send().await?;
-        println!("response: {:#?}", response);
+        let response = request_builder.multipart(form).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        info!("response: {:#?}", response);
         let rf = request.response_format.clone();
-        match rf {
-            Some(response_format) => match response_format {
-                CreateTranscriptionResponseFormat::TEXT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseText {
-                        text,
-                    };
-                    Ok(CreateTranslationResponse::Text(response))
+        if response.status().is_success() {
+            match rf {
+                Some(response_format) => match response_format {
+                    CreateTranscriptionResponseFormat::TEXT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseText {
+                            text,
+                        };
+                        Ok(CreateTranslationResponse::Text(response))
+                    },
+                    CreateTranscriptionResponseFormat::JSON => {
+                        let response = response.json::<CreateTranscriptionResponseJson>().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        Ok(CreateTranslationResponse::Json(response))
+                    },
+                    CreateTranscriptionResponseFormat::SRT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseSrt {
+                            text,
+                        };
+                        Ok(CreateTranslationResponse::Srt(response))
+                    },
+                    CreateTranscriptionResponseFormat::VTT => {
+                        let text = response.text().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        let response = CreateTranscriptionResponseVtt {
+                            text,
+                        };
+                        Ok(CreateTranslationResponse::Vtt(response))
+                    },
+                    CreateTranscriptionResponseFormat::VERBOSEJSON => {
+                        let response = response.json::<CreateTranscriptionResponseVerboseJson>().await
+                            .map_err(|err| OpenAIApiError::from(err))?;
+                        Ok(CreateTranslationResponse::VerboseJson(response))
+                    },
                 },
-                CreateTranscriptionResponseFormat::JSON => {
-                    let response = response.json::<CreateTranscriptionResponseJson>().await?;
+                None => {
+                    let response = response.json::<CreateTranscriptionResponseJson>().await
+                        .map_err(|err| OpenAIApiError::from(err))?;
                     Ok(CreateTranslationResponse::Json(response))
                 },
-                CreateTranscriptionResponseFormat::SRT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseSrt {
-                        text,
-                    };
-                    Ok(CreateTranslationResponse::Srt(response))
-                },
-                CreateTranscriptionResponseFormat::VTT => {
-                    let text = response.text().await?;
-                    let response = CreateTranscriptionResponseVtt {
-                        text,
-                    };
-                    Ok(CreateTranslationResponse::Vtt(response))
-                },
-                CreateTranscriptionResponseFormat::VERBOSEJSON => {
-                    let response = response.json::<CreateTranscriptionResponseVerboseJson>().await?;
-                    Ok(CreateTranslationResponse::VerboseJson(response))
-                },
-            },
-            None => {
-                let response = response.json::<CreateTranscriptionResponseJson>().await?;
-                Ok(CreateTranslationResponse::Json(response))
-            },
+            }
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
         }
+        
         
     }
 
-    /*
-    List files
-    GET https://api.openai.com/v1/files
-    Returns a list of files that belong to the user's organization.
-     */
-    pub async fn list_files(self) -> Result<ListFilesResponse, Error> {
+    /// List files
+    /// GET https://api.openai.com/v1/files
+    /// Returns a list of files that belong to the user's organization.
+    pub async fn list_files(self) -> Result<ListFilesResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/files".to_string(), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<ListFilesResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<ListFilesResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Upload file
-    POST https://api.openai.com/v1/files
-    Upload a file that contains document(s) to be used across various endpoints/features. Currently, the size of all the files uploaded by one organization can be up to 1 GB. Please contact us if you need to increase the storage limit.
-     */
-    pub async fn upload_file(self, request: UploadFileRequest) -> Result<UploadFileResponse, Error> {
+    /// Upload file
+    /// POST https://api.openai.com/v1/files
+    /// Upload a file that contains document(s) to be used across various endpoints/features. Currently, the size of all the files uploaded by one organization can be up to 1 GB. Please contact us if you need to increase the storage limit.
+    pub async fn upload_file(self, request: UploadFileRequest) -> Result<UploadFileResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
@@ -1124,172 +1261,251 @@ impl OpenAIApi {
             .unwrap();
         let form = reqwest::multipart::Form::new().part("file", file_part)
             .text("purpose", request.purpose);
-        let response = request_builder.multipart(form).send().await?;
-        response.json::<UploadFileResponse>().await
+        let response = request_builder.multipart(form).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<UploadFileResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Delete file
-    DELETE https://api.openai.com/v1/files/{file_id}
-    Delete a file.
-     */
-    pub async fn delete_file(self, file_id: String) -> Result<DeleteFileResponse, Error> {
+    /// Delete file
+    /// DELETE https://api.openai.com/v1/files/{file_id}
+    /// Delete a file.
+    pub async fn delete_file(self, file_id: String) -> Result<DeleteFileResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/files/{}", file_id), 
             Method::DELETE,
         );
-        let response = request_builder.send().await?;
-        response.json::<DeleteFileResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<DeleteFileResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Retrieve file
-    GET https://api.openai.com/v1/files/{file_id}
-    Returns information about a specific file.
-     */
-    pub async fn retrieve_file(self, file_id: String) -> Result<RetrieveFileResponse, Error> {
+    /// Retrieve file
+    /// GET https://api.openai.com/v1/files/{file_id}
+    /// Returns information about a specific file.
+    pub async fn retrieve_file(self, file_id: String) -> Result<RetrieveFileResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/files/{}", file_id), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<RetrieveFileResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<RetrieveFileResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Retrieve file content
-    GET https://api.openai.com/v1/files/{file_id}/content
-    Returns the contents of the specified file
-     */
-    pub async fn retrieve_file_content(self, file_id: String) -> Result<String, Error> {
+    /// Retrieve file content
+    /// GET https://api.openai.com/v1/files/{file_id}/content
+    /// Returns the contents of the specified file
+    pub async fn retrieve_file_content(self, file_id: String) -> Result<String, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/files/{}/content", file_id), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.text().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.text().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create fine-tune
-    POST https://api.openai.com/v1/fine-tunes
-    Creates a job that fine-tunes a specified model from a given dataset.
-    Response includes details of the enqueued job including job status and the name of the fine-tuned models once complete.
-     */
-    pub async fn create_fine_tune(self, request: CreateFineTuneRequest) -> Result<CreateFineTuneResponse, Error> {
+    /// Create fine-tune
+    /// POST https://api.openai.com/v1/fine-tunes
+    /// Creates a job that fine-tunes a specified model from a given dataset.
+    /// Response includes details of the enqueued job including job status and the name of the fine-tuned models once complete.
+    pub async fn create_fine_tune(self, request: CreateFineTuneRequest) -> Result<CreateFineTuneResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/fine-tunes".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
-        response.json::<CreateFineTuneResponse>().await
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<CreateFineTuneResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    List fine-tunes
-    GET https://api.openai.com/v1/fine-tunes
-    List your organization's fine-tuning jobs
-     */
-    pub async fn list_fine_tunes(self) -> Result<ListFineTunesResponse, Error> {
+    /// List fine-tunes
+    /// GET https://api.openai.com/v1/fine-tunes
+    /// List your organization's fine-tuning jobs
+    pub async fn list_fine_tunes(self) -> Result<ListFineTunesResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/fine-tunes".to_string(), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<ListFineTunesResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<ListFineTunesResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Retrieve fine-tune
-    GET https://api.openai.com/v1/fine-tunes/{fine_tune_id}
-    Gets info about the fine-tune job.
-     */
-    pub async fn retrieve_fine_tune(self, fine_tune_id: String) -> Result<RetrieveFineTuneResponse, Error> {
+    /// Retrieve fine-tune
+    /// GET https://api.openai.com/v1/fine-tunes/{fine_tune_id}
+    /// Gets info about the fine-tune job.
+    pub async fn retrieve_fine_tune(self, fine_tune_id: String) -> Result<RetrieveFineTuneResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/fine-tunes/{}", fine_tune_id), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<RetrieveFineTuneResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<RetrieveFineTuneResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Cancel fine-tune
-    POST https://api.openai.com/v1/fine-tunes/{fine_tune_id}/cancel
-    Immediately cancel a fine-tune job.
-     */
-    pub async fn cancel_fine_tune(self, fine_tune_id: String) -> Result<CancelFineTuneResponse, Error> {
+    /// Cancel fine-tune
+    /// POST https://api.openai.com/v1/fine-tunes/{fine_tune_id}/cancel
+    /// Immediately cancel a fine-tune job.
+    pub async fn cancel_fine_tune(self, fine_tune_id: String) -> Result<CancelFineTuneResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/fine-tunes/{}/cancel", fine_tune_id), 
             Method::POST,
         );
-        let response = request_builder.send().await?;
-        response.json::<CancelFineTuneResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<CancelFineTuneResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    List fine-tune events
-    GET https://api.openai.com/v1/fine-tunes/{fine_tune_id}/events
-    Get fine-grained status updates for a fine-tune job.
-     */
-    pub async fn list_fine_tune_events(self, fine_tune_id: String) -> Result<ListFineTuneEventsResponse, Error> {
+    /// List fine-tune events
+    /// GET https://api.openai.com/v1/fine-tunes/{fine_tune_id}/events
+    /// Get fine-grained status updates for a fine-tune job.
+    pub async fn list_fine_tune_events(self, fine_tune_id: String) -> Result<ListFineTuneEventsResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/fine-tunes/{}/events", fine_tune_id), 
             Method::GET,
         );
-        let response = request_builder.send().await?;
-        response.json::<ListFineTuneEventsResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<ListFineTuneEventsResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Delete fine-tune model
-    DELETE https://api.openai.com/v1/models/{model}
-    Delete a fine-tuned model. You must have the Owner role in your organization.
-     */
-    pub async fn delete_fine_tune_model(self, model: String) -> Result<DeleteFineTuneModelResponse, Error> {
+    /// Delete fine-tune model
+    /// DELETE https://api.openai.com/v1/models/{model}
+    /// Delete a fine-tuned model. You must have the Owner role in your organization.
+    pub async fn delete_fine_tune_model(self, model: String) -> Result<DeleteFineTuneModelResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             format!("/models/{}", model), 
             Method::DELETE,
         );
-        let response = request_builder.send().await?;
-        response.json::<DeleteFineTuneModelResponse>().await
+        let response = request_builder.send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<DeleteFineTuneModelResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    /*
-    Create moderation
-    POST https://api.openai.com/v1/moderations
-    Classifies if text violates OpenAI's Content Policy
-     */
-    pub async fn create_moderation(self, request: CreateModerationRequest) -> Result<CreateModerationResponse, Error> {
+    /// Create moderation
+    /// POST https://api.openai.com/v1/moderations
+    /// Classifies if text violates OpenAI's Content Policy
+    pub async fn create_moderation(self, request: CreateModerationRequest) -> Result<CreateModerationResponse, OpenAIApiError> {
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
             client_builder, 
             "/moderations".to_string(), 
             Method::POST,
         );
-        let response = request_builder.json(&request).send().await?;
-        response.json::<CreateModerationResponse>().await
+        let response = request_builder.json(&request).send().await
+            .map_err(|err| OpenAIApiError::from(err))?;
+        if response.status().is_success() {
+            response.json::<CreateModerationResponse>().await
+                .map_err(|err| OpenAIApiError::from(err))
+        } else {
+            let status = response.status().as_u16() as i32;
+            let ret_err = response.json::<ReturnErrorType>().await
+                .map_err(|err| OpenAIApiError::from(err))?;
+            Err(OpenAIApiError::new(status, ret_err.error))
+        }
     }
 
-    fn get_mime_type_from_suffix(suffix: String) -> Result<String, Error> {
+    fn get_mime_type_from_suffix(suffix: String) -> Result<String, OpenAIApiError> {
         match suffix.as_str() {
             "json" => Ok(mime::APPLICATION_JSON.to_string()),
             "txt" => Ok(mime::TEXT_PLAIN.to_string()),
@@ -1308,7 +1524,15 @@ impl OpenAIApi {
             "mpeg" => Ok("video/mpeg".to_string()),
             "mpga" => Ok("audio/mpeg".to_string()),
             "webm" => Ok("video/webm".to_string()),
-            _ => panic!("not supported"),
+            _ => {
+                let e = ErrorInfo {
+                    message: format!("Unsupported file type: {}", suffix),
+                    code: None,
+                    message_type: "unsupported_file_type".to_string(),
+                    param: None,
+                };
+                Err(OpenAIApiError::new(400, e))
+            },
         }
     }
 

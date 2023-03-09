@@ -41,3 +41,6 @@ name = "create_completion"
 
 [[example]]
 name = "create_chat_completion"
+
+[[example]]
+name = "create_image"
