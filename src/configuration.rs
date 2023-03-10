@@ -12,6 +12,7 @@ pub struct Configuration {
     pub base_path: String,
     pub proxy: Option<String>,
     pub timeout: Option<u64>,
+    pub ignore_ssl: Option<bool>,
 }
 
 impl Configuration {
@@ -26,6 +27,7 @@ impl Configuration {
             base_path: API_BASE_PATH.to_string(),
             proxy: None,
             timeout: None,
+            ignore_ssl: Some(false),
         }
     }
 
@@ -52,6 +54,11 @@ impl Configuration {
         self
     }
 
+    pub fn ignore_ssl(mut self, ignore_ssl: bool) -> Self {
+        self.ignore_ssl = Some(ignore_ssl);
+        self
+    }
+
     pub fn apply_to_request(self, builder: reqwest::ClientBuilder, path: String, method: reqwest::Method) -> reqwest::RequestBuilder{
         let mut client_builder = match self.proxy.clone() {
             Some(proxy) => {
@@ -62,6 +69,10 @@ impl Configuration {
         };
         client_builder = match self.timeout.clone() {
             Some(timeout) => client_builder.timeout(Duration::from_secs(timeout)),
+            None => client_builder,
+        };
+        client_builder = match self.ignore_ssl.clone() {
+            Some(ignore_ssl) => client_builder.danger_accept_invalid_certs(ignore_ssl),
             None => client_builder,
         };
 

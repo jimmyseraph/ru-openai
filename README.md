@@ -1,5 +1,5 @@
 # Ru-OpenAi
-Rust library for the OpenAI API.
+Rust library for the OpenAI API. In fact, maybe this is the best crate in rust.
 
 ## About OpenAiAPI
 You can learn everything you want to know from [OpenAI API reference].
@@ -10,7 +10,7 @@ An example about how to call `create completion` API.
 Make sure you add the dependence on your Cargo.toml:
 ```toml
 [dependencies]
-ru-openai = "0.1.0"
+ru-openai = "0.1.2"
 ```
 Then create a file named `.env` in your project root directory. Input your own openai `api-key` in it:
 ```
