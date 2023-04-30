@@ -1,50 +1,14 @@
 
 use std::fmt::{Display, Formatter};
 use std::fs;
+use std::pin::Pin;
+use crate::{OpenAIApiError, ReturnErrorType, ErrorInfo, stream};
 use crate::configuration::Configuration;
-use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
 use reqwest::{Method, multipart::Part};
 use tracing::*;
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct ErrorInfo {
-    pub message: String,
-    #[serde(rename = "type")]
-    pub message_type: String,
-    pub param: Option<String>,
-    pub code: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct ReturnErrorType {
-    pub error: ErrorInfo,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct OpenAIApiError {
-    pub code: i32,
-    pub error: ErrorInfo,
-}
-
-impl OpenAIApiError {
-    pub fn new(code: i32, error: ErrorInfo) -> Self {
-        Self { code, error }
-    }
-
-    pub fn from(error: reqwest::Error) -> Self {
-        let code = error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR).as_u16() as i32;
-        let error = ErrorInfo {
-            message: error.to_string(),
-            message_type: "request error".to_string(),
-            param: None,
-            code: None,
-        };
-        Self::new(code, error)
-    }
-}
-
-pub type Error = reqwest::Error;
+use futures::{Stream};
+use reqwest_eventsource::{RequestBuilderExt};
 
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -154,7 +118,7 @@ pub struct CreateCompletionResponseChoice {
     pub text: String,
     pub index: i64,
     pub logprobs: Option<serde_json::Value>,
-    pub finish_reason: String,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -171,13 +135,22 @@ pub struct CreateCompletionResponse {
     pub created: i64,
     pub model: String,
     pub choices: Vec<CreateCompletionResponseChoice>,
-    pub usage: Usage,
+    pub usage: Option<Usage>,
 }
+
+pub type CreateCompletionResponseStream =
+    Pin<Box<dyn Stream<Item = Result<CreateCompletionResponse, OpenAIApiError>> + Send>>;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ChatFormat {
     pub role: String,
     pub content: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ChatFormatDelta {
+    pub role: Option<String>,
+    pub content: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
@@ -230,12 +203,29 @@ pub struct CreateChatCompletionResponseChoice {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+pub struct CreateChatCompletionResponseChoiceDelta {
+    pub delta: ChatFormatDelta,
+    pub index: i64,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
 pub struct CreateChatCompletionResponse {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub choices: Vec<CreateChatCompletionResponseChoice>,
     pub usage: Usage,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct CreateChatCompletionStreamResponse {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<CreateChatCompletionResponseChoiceDelta>,
+    // pub usage: Usage,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
@@ -260,6 +250,9 @@ pub struct CreateEditRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
 }
+
+pub type CreateChatCompletionResponseStream =
+    Pin<Box<dyn Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIApiError>> + Send>>;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct CreateEditResponseChoice {
@@ -761,20 +754,25 @@ impl OpenAIApi {
     pub async fn list_models(self) -> Result<ListModelsResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
-        let request_builder = self.configuration.apply_to_request(
-            client_builder, 
-            "/models".to_string(), 
-            Method::GET,
-        );
-        let response = request_builder.send().await
-            .map_err(|err| OpenAIApiError::from(err))?;
+        let request_builder = self
+            .configuration
+            .apply_to_request(
+                client_builder, 
+                "/models".to_string(), 
+                Method::GET,
+            );
+        let response = request_builder
+            .send()
+            .await
+            .map_err(OpenAIApiError::from)?;
         if response.status().is_success() {
-            response.json::<ListModelsResponse>().await
-                .map_err(|err| OpenAIApiError::from(err))
+            response
+                .json::<ListModelsResponse>()
+                .await
+                .map_err(OpenAIApiError::from)
         } else {
             let status = response.status().as_u16() as i32;
-            let ret_err = response.json::<ReturnErrorType>().await
-                .map_err(|err| OpenAIApiError::from(err))?;
+            let ret_err = response.json::<ReturnErrorType>().await.map_err( OpenAIApiError::from)?;
             Err(OpenAIApiError::new(status, ret_err.error))
         }
     }
@@ -828,6 +826,25 @@ impl OpenAIApi {
         }
     }
 
+    /// Creates a completion request for the provided prompt and parameters
+    ///
+    /// Stream back partial progress. Tokens will be sent as data-only
+    /// [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format)
+    /// as they become available, with the stream terminated by a data: \[DONE\] message.
+    ///
+    /// [CompletionResponseStream] is a parsed SSE stream until a \[DONE\] is received from server.
+    pub async fn create_completion_stream(self, mut request: CreateCompletionRequest) -> Result<CreateCompletionResponseStream, OpenAIApiError> {
+        let client_builder = reqwest::Client::builder();
+        let request_builder = self.configuration.apply_to_request(
+            client_builder, 
+            "/completions".to_string(), 
+            Method::POST,
+        );
+        request.stream = Some(true);
+        let event_source = request_builder.json(&request).eventsource().unwrap();
+        Ok(stream(event_source).await)
+    }
+
     ///
     /// Create chat completion
     /// POST https://api.openai.com/v1/chat/completions
@@ -853,6 +870,25 @@ impl OpenAIApi {
                 .map_err(|err| OpenAIApiError::from(err))?;
             Err(OpenAIApiError::new(status, ret_err.error))
         }
+    }
+
+    /// Creates a chat completion request for the provided prompt and parameters
+    ///
+    /// Stream back partial progress. Tokens will be sent as data-only
+    /// [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format)
+    /// as they become available, with the stream terminated by a data: \[DONE\] message.
+    ///
+    /// [ChatCompletionResponseStream] is a parsed SSE stream until a \[DONE\] is received from server.
+    pub async fn create_chat_completion_stream(self, mut request: CreateChatCompletionRequest) -> Result<CreateChatCompletionResponseStream, OpenAIApiError> {
+        let client_builder = reqwest::Client::builder();
+        let request_builder = self.configuration.apply_to_request(
+            client_builder, 
+            "/chat/completions".to_string(), 
+            Method::POST,
+        );
+        request.stream = Some(true);
+        let event_source = request_builder.json(&request).eventsource().unwrap();
+        Ok(stream(event_source).await)
     }
 
     /// Create edit
