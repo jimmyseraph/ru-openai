@@ -804,7 +804,7 @@ impl OpenAIApi {
     /// Create completion
     /// POST https://api.openai.com/v1/completions
     /// Creates a completion for the provided prompt and parameters
-    pub async fn create_completion(self, request: CreateCompletionRequest) -> Result<CreateCompletionResponse, OpenAIApiError> {
+    pub async fn create_completion(self, mut request: CreateCompletionRequest) -> Result<CreateCompletionResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -812,6 +812,7 @@ impl OpenAIApi {
             "/completions".to_string(), 
             Method::POST,
         );
+        request.stream = None;
         let response = request_builder.json(&request).send().await
             .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
@@ -849,7 +850,7 @@ impl OpenAIApi {
     /// Create chat completion
     /// POST https://api.openai.com/v1/chat/completions
     /// Creates a completion for the chat message
-    pub async fn create_chat_completion(self, request: CreateChatCompletionRequest) -> Result<CreateChatCompletionResponse, OpenAIApiError> {
+    pub async fn create_chat_completion(self, mut request: CreateChatCompletionRequest) -> Result<CreateChatCompletionResponse, OpenAIApiError> {
 
         let client_builder = reqwest::Client::builder();
         let request_builder = self.configuration.apply_to_request(
@@ -857,6 +858,7 @@ impl OpenAIApi {
             "/chat/completions".to_string(), 
             Method::POST,
         );
+        request.stream = None;
         let response = request_builder.json(&request).send().await
             .map_err(|err| OpenAIApiError::from(err))?;
         info!("response: {:#?}", response);
