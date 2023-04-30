@@ -3,7 +3,7 @@ use std::time::Duration;
 
 const API_BASE_PATH: &str = "https://api.openai.com/v1";
 
-const USER_AGENT_VALUE: &str = "openai-rust/0.1.0";
+const USER_AGENT_VALUE: &str = "openai-rust/0.1";
 
 #[derive(Debug)]
 pub struct Configuration {
