@@ -1,4 +1,4 @@
-# Ru-OpenAi
+# Ru-OpenAi (An unofficial API library)
 Rust library for the OpenAI API. In fact, maybe this is the best crate in rust.
 
 ## About OpenAiAPI
